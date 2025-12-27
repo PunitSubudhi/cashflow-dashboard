@@ -1,8 +1,16 @@
 """Data export and import functionality for cashflow dashboard portability."""
+
 import json
 from datetime import date, datetime
 from typing import Optional
-from src.database import get_session, Setting, Transaction, RecurrenceRule, BankImport, init_db
+from src.database import (
+    get_session,
+    Setting,
+    Transaction,
+    RecurrenceRule,
+    BankImport,
+    init_db,
+)
 
 
 EXPORT_VERSION = "1.0"
@@ -21,7 +29,7 @@ def _deserialize_date(s: Optional[str]) -> Optional[date]:
 def export_all_data() -> dict:
     """
     Export all data from the database into a dictionary.
-    
+
     Returns:
         dict: All data from settings, transactions, recurrence rules, and bank imports.
     """
@@ -30,7 +38,7 @@ def export_all_data() -> dict:
         # Export settings
         settings = session.query(Setting).all()
         settings_data = [{"key": s.key, "value": s.value} for s in settings]
-        
+
         # Export transactions
         transactions = session.query(Transaction).all()
         transactions_data = [
@@ -43,11 +51,11 @@ def export_all_data() -> dict:
                 "status": t.status,
                 "category": t.category,
                 "source": t.source,
-                "recurrence_id": t.recurrence_id
+                "recurrence_id": t.recurrence_id,
             }
             for t in transactions
         ]
-        
+
         # Export recurrence rules
         rules = session.query(RecurrenceRule).all()
         rules_data = [
@@ -59,11 +67,11 @@ def export_all_data() -> dict:
                 "frequency": r.frequency,
                 "start_date": _serialize_date(r.start_date),
                 "end_date": _serialize_date(r.end_date),
-                "last_generated_date": _serialize_date(r.last_generated_date)
+                "last_generated_date": _serialize_date(r.last_generated_date),
             }
             for r in rules
         ]
-        
+
         # Export bank imports
         bank_imports = session.query(BankImport).all()
         bank_imports_data = [
@@ -73,11 +81,11 @@ def export_all_data() -> dict:
                 "date": _serialize_date(b.date),
                 "description": b.description,
                 "amount": b.amount,
-                "status": b.status
+                "status": b.status,
             }
             for b in bank_imports
         ]
-        
+
         return {
             "export_version": EXPORT_VERSION,
             "export_timestamp": datetime.now().isoformat(),
@@ -85,8 +93,8 @@ def export_all_data() -> dict:
                 "settings": settings_data,
                 "transactions": transactions_data,
                 "recurrence_rules": rules_data,
-                "bank_imports": bank_imports_data
-            }
+                "bank_imports": bank_imports_data,
+            },
         }
     finally:
         session.close()
@@ -95,7 +103,7 @@ def export_all_data() -> dict:
 def export_to_json() -> str:
     """
     Export all data to a JSON string.
-    
+
     Returns:
         str: JSON string containing all exported data.
     """
@@ -106,15 +114,15 @@ def export_to_json() -> str:
 def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
     """
     Import data from a JSON string.
-    
+
     Args:
         json_str: JSON string containing exported data.
         clear_existing: If True, clears all existing data before import.
                        If False, merges with existing data (may cause conflicts).
-    
+
     Returns:
         dict: Summary of imported records with counts.
-    
+
     Raises:
         ValueError: If the JSON format is invalid or incompatible.
     """
@@ -122,21 +130,21 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON format: {e}")
-    
+
     # Validate structure
     if "export_version" not in data or "data" not in data:
         raise ValueError("Invalid export file format. Missing required fields.")
-    
+
     # Version check (for future compatibility)
     version = data.get("export_version", "unknown")
     if version not in ["1.0"]:
         raise ValueError(f"Unsupported export version: {version}")
-    
+
     export_data = data["data"]
-    
+
     # Ensure database is initialized
     init_db()
-    
+
     session = get_session()
     try:
         # Clear existing data if requested
@@ -146,20 +154,20 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
             session.query(RecurrenceRule).delete()
             session.query(Setting).delete()
             session.commit()
-        
+
         counts = {
             "settings": 0,
             "transactions": 0,
             "recurrence_rules": 0,
-            "bank_imports": 0
+            "bank_imports": 0,
         }
-        
+
         # Import settings
         for s in export_data.get("settings", []):
             setting = Setting(key=s["key"], value=s["value"])
             session.merge(setting)  # merge handles both insert and update
             counts["settings"] += 1
-        
+
         # Import recurrence rules first (transactions may reference them)
         id_mapping_rules = {}  # old_id -> new_id
         for r in export_data.get("recurrence_rules", []):
@@ -171,20 +179,22 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
                 frequency=r["frequency"],
                 start_date=_deserialize_date(r["start_date"]),
                 end_date=_deserialize_date(r.get("end_date")),
-                last_generated_date=_deserialize_date(r.get("last_generated_date"))
+                last_generated_date=_deserialize_date(r.get("last_generated_date")),
             )
             session.add(rule)
             session.flush()  # Get the new ID
             if old_id:
                 id_mapping_rules[old_id] = rule.id
             counts["recurrence_rules"] += 1
-        
+
         # Import transactions
         for t in export_data.get("transactions", []):
             # Map old recurrence_id to new one
             old_recurrence_id = t.get("recurrence_id")
-            new_recurrence_id = id_mapping_rules.get(old_recurrence_id) if old_recurrence_id else None
-            
+            new_recurrence_id = (
+                id_mapping_rules.get(old_recurrence_id) if old_recurrence_id else None
+            )
+
             txn = Transaction(
                 date=_deserialize_date(t["date"]),
                 description=t["description"],
@@ -193,11 +203,11 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
                 status=t["status"],
                 category=t.get("category", ""),
                 source=t.get("source", "MANUAL"),
-                recurrence_id=new_recurrence_id
+                recurrence_id=new_recurrence_id,
             )
             session.add(txn)
             counts["transactions"] += 1
-        
+
         # Import bank imports
         for b in export_data.get("bank_imports", []):
             bank_import = BankImport(
@@ -205,20 +215,20 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
                 date=_deserialize_date(b["date"]),
                 description=b["description"],
                 amount=b["amount"],
-                status=b["status"]
+                status=b["status"],
             )
             session.add(bank_import)
             counts["bank_imports"] += 1
-        
+
         session.commit()
-        
+
         return {
             "success": True,
             "counts": counts,
             "export_timestamp": data.get("export_timestamp"),
-            "export_version": version
+            "export_version": version,
         }
-    
+
     except Exception as e:
         session.rollback()
         raise ValueError(f"Import failed: {e}")
@@ -229,7 +239,7 @@ def import_from_json(json_str: str, clear_existing: bool = True) -> dict:
 def get_data_summary() -> dict:
     """
     Get a summary of current data in the database.
-    
+
     Returns:
         dict: Counts of records in each table.
     """
@@ -239,7 +249,7 @@ def get_data_summary() -> dict:
             "settings": session.query(Setting).count(),
             "transactions": session.query(Transaction).count(),
             "recurrence_rules": session.query(RecurrenceRule).count(),
-            "bank_imports": session.query(BankImport).count()
+            "bank_imports": session.query(BankImport).count(),
         }
     finally:
         session.close()
